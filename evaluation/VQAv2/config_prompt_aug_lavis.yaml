@@ -1,0 +1,66 @@
+# Copyright (c) 2022, salesforce.com, inc.
+# All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+# For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
+
+# Configuration for BLIP2 with EfficientNet prompt augmentation using LAVIS backend
+# This combines the benefits of prompt augmentation with LAVIS model management
+
+# Model configuration: use the new LAVIS-based prompt augmentation backend
+model: "blip2_prompt_aug_lavis"
+
+# Optional: Model-specific configuration for prompt augmentation
+model_config:
+  efficientnet:
+    topk: 3  # Number of top EfficientNet labels to include
+    prompt_template: "Context: {labels}. "
+    # prompt_template: "Optional context hints (do not repeat in the answer): {labels}."  # Template for label injection tuned for VQA
+
+# For backward compatibility, you can also specify LAVIS model details
+# model:
+#   arch: blip2_opt
+#   model_type: pretrain_opt2.7b
+#   use_grad_checkpoint: False
+
+datasets:
+  coco_vqa: # name of the dataset builder
+    type: eval
+    vis_processor:
+        eval:
+          name: "blip_image_eval"
+          image_size: 224
+    text_processor:
+        eval:
+          name: "blip_question"
+    build_info:
+        images:
+            storage: '/data/lavis/coco/images/'
+
+run:
+  task: vqa
+  # optimization-specific
+  batch_size_train: 16
+  batch_size_eval: 64
+  num_workers: 8
+
+  # inference-specific
+  max_len: 10
+  min_len: 1
+  num_beams: 5
+  inference_method: "generate"
+  prompt: "Question: {} Short answer:"
+
+  seed: 42
+  output_dir: "output/PromptAugLavis/VQA"
+
+  evaluate: True
+  test_splits: ["val"]
+  
+  # Set to 1.0 to use full dataset, 0.5 to use 50%, etc.
+  data_percentage: 0.01
+
+  # distribution-specific
+  device: "cuda"
+  world_size: 1
+  dist_url: "env://"
+  distributed: True

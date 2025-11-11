@@ -1,0 +1,86 @@
+# Configuration for evaluating Gated BLIP2 on VQAv2.
+#
+# This configuration loads the Gated BLIP2 model checkpoint and evaluates
+# it on the VQAv2 dataset. The Gated model uses EfficientNet-B3 for visual
+# style modulation with gating parameters applied to Q-Former cross-attention.
+
+model: "blip2_gated"
+
+model_config:
+  # Path to the trained Gated checkpoint
+  checkpoint: "/home/linux/artcap-blip2-4/models/Gated/checkpoints/best.pt"
+
+  # EfficientNet checkpoint path (required for Gated model)
+  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/runs/efficientnet-28/best.pt"
+
+  model:
+    opt_model: "facebook/opt-2.7b"
+    efficientnet_output_dim: 768
+    convert_from_blip_norm: true
+
+  gating:
+    type: film
+    per_head: true
+    hidden_dim: 512
+    init_scale: 0.01
+    use_layer_norm: true
+
+  prompt_mapper:
+    num_tokens: 4
+    hidden_dim: 1024
+    dropout: 0.1
+    use_layer_norm: true
+
+  lora:
+    enabled: false
+    rank: 8
+    alpha: 16
+    dropout: 0.0
+
+  architecture:
+    vit_model: "eva_clip_g"
+    img_size: 224
+    num_query_token: 32
+    max_txt_len: 32
+    freeze_vit: true
+
+datasets:
+  coco_vqa:
+    type: eval
+    vis_processor:
+      eval:
+        name: "blip_image_eval"
+        image_size: 224
+    text_processor:
+      eval:
+        name: "blip_question"
+    build_info:
+      images:
+        storage: "/data/lavis/coco/images/"
+
+run:
+  task: vqa
+
+  batch_size_train: 4
+  batch_size_eval: 8
+  num_workers: 4
+
+  max_len: 10
+  min_len: 1
+  num_beams: 5
+  inference_method: "generate"
+  prompt: "Question: {} Short answer:"
+  length_penalty: 0.0
+
+  seed: 42
+  output_dir: "output/Gated/VQA"
+
+  evaluate: true
+  test_splits: ["val"]
+  data_percentage: 0.01
+
+  device: "cuda"
+  world_size: 1
+  dist_url: "env://"
+  distributed: true
+

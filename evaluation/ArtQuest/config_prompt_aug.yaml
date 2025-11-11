@@ -1,0 +1,55 @@
+# ArtQuest Evaluation Configuration for BLIP2 with Prompt Augmentation
+# 
+# This config follows the structure of VQAv2 evaluation configs.
+# Set data_percentage to 1.0 to use the full dataset, or 0.5 to use 50% of the data, etc.
+
+# Model configuration: use the new LAVIS-based prompt augmentation backend
+model: "blip2_prompt_aug"
+
+# Optional: Model-specific configuration for prompt augmentation
+model_config:
+  efficientnet:
+    topk: 3  # Number of top EfficientNet labels to include
+    prompt_template: "Context: {labels}. "
+
+  # Specify local OPT model to avoid downloading
+  opt_model: "/home/linux/artcap-blip2-4/models/blip2-opt-2.7b"
+
+# Data paths (relative to project root)
+data:
+  artquest_test: "artquest/data/artquest/artquest_test.csv"
+  semart_cache: "artquest/data/semart_cache.csv"
+  retrieved_candidates: "artquest/retrieval_module/output/SEMARTCLIP.200BS.IMAGE_TO_TEXT_reference_candidate.pickle"
+  image_root: "artquest/data/SemArt/Images"  # Root directory for ArtQuest images
+
+run:
+  # optimization-specific
+  batch_size_eval: 1  # Process one at a time for ArtQuest
+  
+  # inference-specific (for BLIP2)
+  # max_len: 控制生成答案的最大token数（不包括输入prompt的token）
+  #   - VQAv2短答案: 推荐 10-15
+  #   - ArtQuest答案: 推荐 20-30（因为答案可能包含完整句子）
+  #   注意：token数通常比单词数多（因为标点、词干化等），建议设置稍大一些
+  max_len: 30  # 增加到25以覆盖95%的答案（95%分位数约6单词，考虑token化需要更多）
+  
+  # min_len: 生成答案的最小token数
+  #   - 通常设置为1，允许单字/单词答案
+  min_len: 1
+  
+  # num_beams: Beam search的beam数量
+  #   - 更大的值（5-10）通常产生更好的答案，但速度更慢
+  #   - 推荐值：5（平衡质量和速度）
+  num_beams: 5
+  
+  inference_method: "generate"
+  prompt: "{}"  # Simple prompt since adapter dataset already combines question and context
+  
+  seed: 2
+  output_dir: "ArtQuest/output/PromptAug"
+  
+  # Set to 1.0 to use full dataset, 0.5 to use 50%, etc.
+  data_percentage: 0.1
+  
+  # distribution-specific
+  device: "cuda"

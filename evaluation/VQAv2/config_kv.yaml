@@ -1,0 +1,74 @@
+# Configuration for evaluating KV-modulated BLIP2 on VQAv2.
+#
+# Update the checkpoint paths below if you have trained checkpoints in
+# different locations. The default paths assume the repository layout
+# from this project.
+
+model: "blip2_kv"
+
+model_config:
+  # Path to the trained KV-modulated checkpoint
+  checkpoint: "/home/linux/artcap-blip2-4/KV/outputs_multi/best_checkpoint.pt"
+
+  # Optional shortcut: if provided here, it will be forwarded into the
+  # internal model config passed to the loader utility.
+  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/runs/efficientnet-28/best.pt"
+
+  # model:
+  #   opt_model: "facebook/opt-2.7b"
+
+  kv_modulation:
+    enabled: true
+    num_prefix_tokens: 8
+
+  architecture:
+    vit_model: "eva_clip_g"
+    img_size: 224
+    num_query_token: 32
+    max_txt_len: 32
+    freeze_vit: true
+    freeze_llm: true
+    freeze_efficientnet: true
+
+datasets:
+  coco_vqa:
+    type: eval
+    vis_processor:
+      eval:
+        name: "blip_image_eval"
+        image_size: 224
+    text_processor:
+      eval:
+        name: "blip_question"
+    build_info:
+      images:
+        storage: "/data/lavis/coco/images/"
+
+run:
+  task: vqa
+
+  batch_size_train: 4
+  batch_size_eval: 8
+  num_workers: 4
+
+  max_len: 10
+  min_len: 1
+  num_beams: 5
+  inference_method: "generate"
+  prompt: "Question: {} Short answer:"
+  length_penalty: 0.0
+
+  seed: 42
+  output_dir: "output/KV/VQA"
+
+  evaluate: true
+  test_splits: ["val"]
+  data_percentage: 0.01
+
+  device: "cuda"
+  world_size: 1
+  dist_url: "env://"
+  distributed: true
+
+
+
