@@ -1,0 +1,78 @@
+# Machine Learning Model Files
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
+*.onnx
+
+# Model directories
+
+
+# HuggingFace model cache
+.cache/
+
+# Training checkpoints
+checkpoint*
+
+# Local data directories
+data/
+
+# Environment files
+.env
+.venv
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 最终文章 - 副本 文件夹
+最终文章 - 副本/
+
+# Large files (>100MB)
+*.[Pp][Tt]
+*.[Pp][Tt][Hh]
+*.[Bb][Ii][Nn]
+*.[Ss][Aa][Ff][Ee][Tt][Ee][Nn][Ss][Oo][Rr][Ss]
+*.[Cc][Kk][Pp][Tt]
+*.[Hh]5
+*.[Oo][Nn][Nn][Xx]
+
+# Cache directories
+wandb/
+runs/
+output/
+logs/
+*.log
+
+# Training outputs and checkpoints
+artquest/model_checkpoints/
+KV/outputs_multi/
+evaluation/*/output/
+
+# Large data files
+*.pickle
+*.pkl
+*.hdf5
+*.h5
+*.npy
+*.npz
+
+# Temporary files
+*.tmp
+*.temp
