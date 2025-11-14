@@ -76,3 +76,6 @@ evaluation/*/output/
 # Temporary files
 *.tmp
 *.temp
+
+paper/
+datasets/
