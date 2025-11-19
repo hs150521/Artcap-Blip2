@@ -79,3 +79,4 @@ evaluation/*/output/
 
 paper/
 datasets/
+.cursor/
