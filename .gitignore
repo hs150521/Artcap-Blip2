@@ -79,4 +79,6 @@ evaluation/*/output/
 
 paper/
 datasets/
-.cursor/
+.cursor
+
+models/blip2-opt-2.7b
