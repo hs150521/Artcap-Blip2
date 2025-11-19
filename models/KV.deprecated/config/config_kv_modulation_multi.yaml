@@ -1,0 +1,89 @@
+# Configuration for BLIP2-EfficientNet KV Modulation Training with Multi-Dataset
+
+# Project settings
+project:
+  seed: 1337
+
+# Model paths
+model:
+  blip2_model_type: "pretrain_opt2.7b"
+  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/runs/efficientnet-28/best.pt"
+  opt_model: "facebook/opt-2.7b"
+
+# KV Modulation parameters
+kv_modulation:
+  enabled: true
+  num_prefix_tokens: 8
+  efficientnet_feat_dim: 1536
+  qformer_hidden_size: 768
+
+# ArtQuest dataset configuration
+artquest_dataset:
+  train_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_train.csv"
+  val_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_val.csv"
+  test_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_test.csv"  # Optional
+  image_root: "/home/linux/artcap-blip2-4/artquest/data/SemArt/Images"  # Root directory for images
+  cache_path: "/home/linux/artcap-blip2-4/artquest/data/semart_cache.csv"  # Optional
+  num_workers: 4
+  image_size: 224
+
+# Dataset paths (for compatibility with single-dataset training script)
+dataset:
+  train_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_train.csv"
+  val_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_val.csv"
+  test_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_test.csv"  # Optional
+  image_root: "/home/linux/artcap-blip2-4/artquest/data/SemArt/Images"  # Root directory for images
+  cache_path: "/home/linux/artcap-blip2-4/artquest/data/semart_cache.csv"  # Optional
+
+# VQA dataset configuration
+# Note: Training files are not available, using validation files for both train and val
+# If you have training files, update these paths accordingly
+vqa_dataset:
+  # COCO Captions data paths (using captions dataset as alternative to VQA)
+  train_annotation_file: "/data/lavis/coco/annotations/captions_train2014.json"
+  train_question_file: "/data/lavis/coco/annotations/captions_train2014.json"
+  val_annotation_file: "/data/lavis/coco/annotations/captions_val2014.json"
+  val_question_file: "/data/lavis/coco/annotations/captions_val2014.json"
+  image_root: "/data/lavis/coco/images/"
+  num_workers: 8
+  max_samples: 50000  # Limit COCO Captions samples for balanced training
+
+# Multi-dataset training parameters
+multi_dataset:
+  enabled: true
+  dataset_mix_ratio: 0.5  # ArtQuest:VQA ratio (0-1), 0.5 means equal mix
+  max_samples_per_dataset: 50000  # Limit samples per dataset for balanced training
+
+# Training parameters
+training:
+  batch_size: 24
+  num_epochs: 20
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 1
+  use_amp: true
+  
+  # Save and logging
+  output_dir: "KV/outputs_multi"
+  save_steps: 1000
+  eval_steps: 500
+  logging_steps: 100
+  save_total_limit: 3
+
+# Model architecture
+architecture:
+  vit_model: "eva_clip_g"
+  img_size: 224
+  num_query_token: 32
+  max_txt_len: 32
+  freeze_vit: true
+  freeze_llm: false  # Unfreeze Qformer for better training
+  freeze_efficientnet: true
+
+# Generation parameters (for inference)
+generation:
+  num_beams: 5
+  max_length: 30
+  min_length: 1

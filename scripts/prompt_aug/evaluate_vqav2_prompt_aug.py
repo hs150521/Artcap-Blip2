@@ -178,7 +178,7 @@ def _build_parser(default_root: Path) -> argparse.ArgumentParser:
     parser.add_argument(
         "--topk",
         type=int,
-        default=3,
+        default=2,
         help="Number of EfficientNet predictions to inject into the prompt.",
     )
     parser.add_argument(

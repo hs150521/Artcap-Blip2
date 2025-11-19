@@ -9,6 +9,7 @@ and adapts the prediction function for ArtQuest's specific requirements
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -93,6 +94,19 @@ def predict_answers_blip2_prompt_aug_artquest(
     
     def build_text_input(question: str, context: str, prompt_template: str) -> str:
         """Build text input from question and context using prompt template."""
+        question = (question or "").strip()
+        context = (context or "").strip()
+
+        def _strip_empty_context(text: str) -> str:
+            if context:
+                return text.strip()
+            cleaned = re.sub(r"\b[Cc]ontext:\s*", "", text)
+            cleaned = re.sub(r"\s{2,}", " ", cleaned)
+            return cleaned.strip()
+
+        def _combine_question_context(q: str, ctx: str) -> str:
+            return f"{q} Context: {ctx}".strip() if ctx else q
+
         # Try different template formats
         try:
             # Format: "Question: {question} Context: {context} Short answer:"
@@ -103,15 +117,17 @@ def predict_answers_blip2_prompt_aug_artquest(
                 text = prompt_template.format(question, context)
             # Format: "Question: {} Short answer:" (single placeholder)
             elif "{}" in prompt_template:
-                combined = f"{question} Context: {context}"
+                combined = _combine_question_context(question, context)
                 text = prompt_template.format(combined)
             else:
                 # Default: append context to question
-                text = f"{prompt_template} {question} Context: {context}"
+                combined = _combine_question_context(question, context)
+                text = f"{prompt_template} {combined}"
         except (KeyError, IndexError):
             # Fallback: simple concatenation
-            text = f"{question} Context: {context}"
-        return text
+            combined = _combine_question_context(question, context)
+            text = combined
+        return _strip_empty_context(text)
     
     def load_and_process_image(image_name: str, image_root: str, vis_processor):
         """Load image from filename and process it."""

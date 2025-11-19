@@ -7,6 +7,7 @@ It reuses the BLIP2 LAVIS model loader and adapts the prediction function
 for ArtQuest's specific requirements (image loading, context handling, etc.).
 """
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -58,6 +59,15 @@ def predict_answers_blip2_artquest(
     max_len = run_cfg.get("max_len", 10)
     min_len = run_cfg.get("min_len", 1)
     inference_method = run_cfg.get("inference_method", "generate")
+
+    # Determine how much formatting should be delegated to the underlying LAVIS model.
+    # If the template expects both question and context placeholders, we finish formatting
+    # inside this adapter and pass an empty prompt to avoid a second formatting pass.
+    prompt_for_model = prompt
+    if prompt:
+        has_named_slots = ("{question}" in prompt) or ("{context}" in prompt)
+        if has_named_slots or prompt.count("{}") >= 2:
+            prompt_for_model = ""
     
     # Get image root path from config
     data_cfg = config.get("data", {})
@@ -90,27 +100,36 @@ def predict_answers_blip2_artquest(
     import logging
     logging.info(f"Using blip2_artquest: batch_size={batch_size}, image_root={image_root}")
     
+    def _normalize_text(value: Any) -> str:
+        """Convert NaN/None values to empty strings and strip whitespace."""
+        if value is None:
+            return ""
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+        text = str(value)
+        return text.strip()
+
     def build_text_input(question: str, context: str, prompt_template: str) -> str:
         """Build text input from question and context using prompt template."""
-        # Try different template formats
+        question_clean = _normalize_text(question)
+        context_clean = _normalize_text(context)
+        template = prompt_template or ""
+
         try:
-            # Format: "Question: {question} Context: {context} Short answer:"
-            if "{question}" in prompt_template and "{context}" in prompt_template:
-                text = prompt_template.format(question=question, context=context)
-            # Format: "Question: {} Context: {} Short answer:" (two placeholders)
-            elif prompt_template.count("{}") == 2:
-                text = prompt_template.format(question, context)
-            # Format: "Question: {} Short answer:" (single placeholder)
-            elif "{}" in prompt_template:
-                combined = f"{question} Context: {context}"
-                text = prompt_template.format(combined)
-            else:
-                # Default: append context to question
-                text = f"{prompt_template} {question} Context: {context}"
-        except (KeyError, IndexError):
-            # Fallback: simple concatenation
-            text = f"{question} Context: {context}"
-        return text
+            if "{question}" in template or "{context}" in template:
+                return template.format(question=question_clean, context=context_clean)
+
+            placeholder_count = template.count("{}")
+            if placeholder_count >= 2:
+                return template.format(question_clean, context_clean)
+            if placeholder_count == 1:
+                combined = f"Question: {question_clean}\nContext: {context_clean}".strip()
+                return template.format(combined)
+        except (KeyError, IndexError, ValueError):
+            pass
+
+        base = f"Question: {question_clean}\nContext: {context_clean}".strip()
+        return f"{base}\nShort answer:".strip() if base else "Short answer:"
     
     def load_and_process_image(image_name: str, image_root: str, vis_processor):
         """Load image from filename and process it."""
@@ -146,13 +165,13 @@ def predict_answers_blip2_artquest(
                 # Extract data from sample - handle different dataset formats
                 if isinstance(sample, dict):
                     # Standard ArtQuest dataset format
-                    image_name = sample.get("image", "")
+                    image_source = sample.get("image", "")
                     question = sample.get("question", "")
                     context = sample.get("context", "")
                     candidate_context = sample.get("candidate_context", context)
                 else:
                     # Adapter dataset format (from create_artquest_adapter_dataset)
-                    image_name = getattr(sample, "image", "")
+                    image_source = getattr(sample, "image", "")
                     question = getattr(sample, "text_input", "")
                     context = ""  # Context is already combined in text_input
                     candidate_context = ""
@@ -167,12 +186,30 @@ def predict_answers_blip2_artquest(
                         question = text_input
                 
                 # Load and process image
-                try:
-                    processed_image = load_and_process_image(image_name, image_root, vis_processor)
-                except Exception as e:
-                    logging.warning(f"Failed to load image {image_name}: {e}")
-                    # Use a dummy image if loading fails
-                    processed_image = torch.zeros((3, 224, 224))
+                processed_image = None
+                image_name = None
+
+                if isinstance(image_source, torch.Tensor):
+                    processed_image = image_source
+                elif isinstance(image_source, (bytes, bytearray)):
+                    image_name = image_source.decode("utf-8")
+                elif hasattr(image_source, "__fspath__"):
+                    image_name = os.fspath(image_source)
+                else:
+                    image_name = image_source
+
+                if processed_image is None:
+                    if not isinstance(image_name, str):
+                        image_name = str(image_name) if image_name is not None else ""
+                    try:
+                        processed_image = load_and_process_image(image_name, image_root, vis_processor)
+                    except Exception as e:
+                        logging.warning(f"Failed to load image {image_name}: {e}")
+                        # Use a dummy image if loading fails
+                        processed_image = torch.zeros((3, 224, 224))
+                else:
+                    # Ensure tensor is on CPU for consistent downstream handling
+                    processed_image = processed_image.detach().cpu()
                 
                 # Convert to tensor if needed and add batch dimension
                 if not isinstance(processed_image, torch.Tensor):
@@ -198,6 +235,7 @@ def predict_answers_blip2_artquest(
                     inference_method=inference_method,
                     max_len=max_len,
                     min_len=min_len,
+                    prompt=prompt_for_model,
                 )
                 answer_original = answers_original[0] if isinstance(answers_original, list) else answers_original
                 
@@ -214,6 +252,7 @@ def predict_answers_blip2_artquest(
                     inference_method=inference_method,
                     max_len=max_len,
                     min_len=min_len,
+                    prompt=prompt_for_model,
                 )
                 answer_retrieved = answers_retrieved[0] if isinstance(answers_retrieved, list) else answers_retrieved
                 

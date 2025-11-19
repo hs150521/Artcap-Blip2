@@ -136,12 +136,12 @@ def create_artquest_adapter_dataset(
         Adapter dataset compatible with blip2_lavis
     """
     data_cfg = config_dict.get("data", {})
-    image_root = data_cfg.get("image_root", "artquest/data/SemArt/Images")
+    image_root = data_cfg.get("image_root", "datasets/artquest/SemArt/Images")
     
-    # Convert to absolute path if relative
+    # Convert to absolute path relative to this file if relative
     project_root = Path(__file__).parent.parent.parent
     if not os.path.isabs(image_root):
-        image_root = os.path.join(project_root, image_root)
+        image_root = str(project_root / image_root)
     
     # Load image processor
     sys.path.insert(0, str(project_root / "blip2" / "LAVIS"))
@@ -193,20 +193,21 @@ def create_artquest_adapter_dataset(
             context = sample.get("candidate_context", sample["context"]) if self.use_retrieved_context else sample["context"]
             
             # Load and process image
-            # Debug: check image_name type before os.join
+            # Debug: check image_name type before path join
             if not isinstance(image_name, str):
-                logging.error(f"CRITICAL: image_name is not string before os.join! Type: {type(image_name)}, Value: {repr(image_name)}")
-            image_path = os.path.join(self.image_root, image_name)
-            if not os.path.exists(image_path):
+                logging.error(f"CRITICAL: image_name is not string before path join! Type: {type(image_name)}, Value: {repr(image_name)}")
+            image_path = Path(self.image_root) / image_name
+            if not image_path.exists():
                 # Try alternative paths
                 alt_paths = [
-                    os.path.join(self.image_root, os.path.basename(image_name)),
-                    image_name,  # Try as absolute path
+                    Path(self.image_root) / os.path.basename(image_name),
+                    Path(image_name),  # Try as absolute path
                 ]
                 for alt_path in alt_paths:
-                    if os.path.exists(alt_path):
+                    if alt_path.exists():
                         image_path = alt_path
                         break
+            image_path = str(image_path)
             
             try:
                 image = Image.open(image_path).convert("RGB")
@@ -259,20 +260,21 @@ def load_artquest_data(config_dict: Dict, data_percentage: float = 1.0) -> Any:
     """
     data_cfg = config_dict.get("data", {})
     
-    # Load data files - paths are relative to artquest directory
-    artquest_test_path = data_cfg.get("artquest_test", "artquest/data/artquest/artquest_test.csv")
-    semart_cache_path = data_cfg.get("semart_cache", "artquest/data/semart_cache.csv")
+    # Load data files - paths are relative to project root (datasets directory)
+    # Default paths assume data is in datasets/artquest/
+    artquest_test_path = data_cfg.get("artquest_test", "datasets/artquest/artquest_test.csv")
+    semart_cache_path = data_cfg.get("semart_cache", "datasets/artquest/semart_cache.csv")
     retrieved_candidates_path = data_cfg.get("retrieved_candidates", 
-        "artquest/retrieval_module/output/SEMARTCLIP.200BS.IMAGE_TO_TEXT_reference_candidate.pickle")
+        "datasets/artquest/retrieved_candidates/SEMARTCLIP.200BS.IMAGE_TO_TEXT_reference_candidate.pickle")
     
-    # Convert to absolute paths if relative
+    # Convert to absolute paths relative to this file if relative
     project_root = Path(__file__).parent.parent.parent
     if not os.path.isabs(artquest_test_path):
-        artquest_test_path = os.path.join(project_root, artquest_test_path)
+        artquest_test_path = str(project_root / artquest_test_path)
     if not os.path.isabs(semart_cache_path):
-        semart_cache_path = os.path.join(project_root, semart_cache_path)
+        semart_cache_path = str(project_root / semart_cache_path)
     if not os.path.isabs(retrieved_candidates_path):
-        retrieved_candidates_path = os.path.join(project_root, retrieved_candidates_path)
+        retrieved_candidates_path = str(project_root / retrieved_candidates_path)
     
     logging.info(f"Loading ArtQuest test data from {artquest_test_path}")
     artquest_test = pd.read_csv(artquest_test_path)
@@ -359,7 +361,7 @@ def evaluate_results(
     Evaluate predictions against ground truth.
     
     Args:
-        predictions: List of predictions with question_id, answer, and answer_retrieved
+        predictions: List of predictions with question_id and answer
         dataset: Dataset object to get ground truth answers
         output_dir: Directory to save results
         
@@ -371,7 +373,6 @@ def evaluate_results(
     # Extract ground truth and predictions
     answers = []
     preds_original = []
-    preds_retrieved = []
     
     # Create a mapping from question_id to prediction
     pred_dict = {pred["question_id"]: pred for pred in predictions}
@@ -382,25 +383,16 @@ def evaluate_results(
         
         if question_id in pred_dict:
             answers.append(sample["answer"].lower())
-            preds_original.append(pred_dict[question_id]["answer"].lower())
-            preds_retrieved.append(pred_dict[question_id]["answer_retrieved"].lower())
+            preds_original.append(pred_dict[question_id].get("answer", "").lower())
     
     # Calculate metrics for original context
     em_original = calc_em(answers, preds_original)
     bleu_original = calc_bleu_sentence(answers, preds_original)
     
-    # Calculate metrics for retrieved context
-    em_retrieved = calc_em(answers, preds_retrieved)
-    bleu_retrieved = calc_bleu_sentence(answers, preds_retrieved)
-    
     metrics = {
         "original_context": {
             "em": round(em_original, 4),
             "bleu": round(bleu_original, 4)
-        },
-        "retrieved_context": {
-            "em": round(em_retrieved, 4),
-            "bleu": round(bleu_retrieved, 4)
         }
     }
     
@@ -408,9 +400,6 @@ def evaluate_results(
     logging.info("Metrics for the original context:")
     logging.info(f"  EM: {metrics['original_context']['em']:.4f}")
     logging.info(f"  BLEU: {metrics['original_context']['bleu']:.4f}")
-    logging.info("Metrics for the retrieved context:")
-    logging.info(f"  EM: {metrics['retrieved_context']['em']:.4f}")
-    logging.info(f"  BLEU: {metrics['retrieved_context']['bleu']:.4f}")
     
     # Save metrics to file
     metrics_file = os.path.join(output_dir, "evaluate.txt")
@@ -521,46 +510,57 @@ def main():
     logging.info(f"Dataset ready with {len(artquest_dataset)} samples")
     
     # Create adapter datasets for original and retrieved contexts
-    logging.info("Creating adapter datasets...")
-    dataset_original = create_artquest_adapter_dataset(
-        artquest_dataset, config, use_retrieved_context=False
-    )
-    dataset_retrieved = create_artquest_adapter_dataset(
-        artquest_dataset, config, use_retrieved_context=True
-    )
+    # Determine whether the backend already handles ArtQuest-specific preprocessing
+    predictor_module = getattr(predict_answers_func, "__module__", "")
+    native_modules = {
+        "evaluation.ArtQuest.models.blip2_artquest",
+        "evaluation.ArtQuest.models.blip2_prompt_aug_artquest",
+        "evaluation.ArtQuest.models.blip2_kv_artquest",
+        "evaluation.ArtQuest.models.blip2_gated_artquest",
+        "models.blip2_artquest",
+        "models.blip2_prompt_aug_artquest",
+        "models.blip2_kv_artquest",
+        "models.blip2_gated_artquest",
+        "blip2_artquest",
+        "blip2_prompt_aug_artquest",
+        "blip2_kv_artquest",
+        "blip2_gated_artquest",
+    }
+    uses_artquest_native_backend = predictor_module in native_modules
     
-    # Run inference for original context
-    logging.info("Running model inference for original context...")
-    predictions_original = predict_answers_func(
-        model=model,
-        dataset=dataset_original,
-        config=config,
-        batch_size=batch_size,
-        device=device
-    )
-    
-    # Run inference for retrieved context
-    logging.info("Running model inference for retrieved context...")
-    predictions_retrieved = predict_answers_func(
-        model=model,
-        dataset=dataset_retrieved,
-        config=config,
-        batch_size=batch_size,
-        device=device
-    )
-    
-    # Merge predictions
-    pred_dict_original = {pred["question_id"]: pred["answer"] for pred in predictions_original}
-    pred_dict_retrieved = {pred["question_id"]: pred["answer"] for pred in predictions_retrieved}
-    
-    predictions = []
-    for i in range(len(artquest_dataset)):
-        question_id = artquest_dataset[i]["question_id"]
-        predictions.append({
-            "question_id": question_id,
-            "answer": pred_dict_original.get(question_id, ""),
-            "answer_retrieved": pred_dict_retrieved.get(question_id, "")
-        })
+    if uses_artquest_native_backend:
+        logging.info("Detected ArtQuest-native backend; running single-pass inference.")
+        predictions = predict_answers_func(
+            model=model,
+            dataset=artquest_dataset,
+            config=config,
+            batch_size=batch_size,
+            device=device
+        )
+    else:
+        logging.info("Creating adapter dataset (no retrieved contexts)...")
+        dataset_original = create_artquest_adapter_dataset(
+            artquest_dataset, config, use_retrieved_context=False
+        )
+        
+        logging.info("Running model inference...")
+        predictions_original = predict_answers_func(
+            model=model,
+            dataset=dataset_original,
+            config=config,
+            batch_size=batch_size,
+            device=device
+        )
+        
+        pred_dict_original = {pred["question_id"]: pred["answer"] for pred in predictions_original}
+        
+        predictions = []
+        for i in range(len(artquest_dataset)):
+            question_id = artquest_dataset[i]["question_id"]
+            predictions.append({
+                "question_id": question_id,
+                "answer": pred_dict_original.get(question_id, ""),
+            })
     
     # Evaluate results
     logging.info("Evaluating results...")
@@ -572,7 +572,6 @@ def main():
     
     logging.info("Evaluation completed successfully!")
     logging.info(f"Original Context - EM: {metrics['original_context']['em']:.4f}, BLEU: {metrics['original_context']['bleu']:.4f}")
-    logging.info(f"Retrieved Context - EM: {metrics['retrieved_context']['em']:.4f}, BLEU: {metrics['retrieved_context']['bleu']:.4f}")
 
 
 if __name__ == "__main__":

@@ -36,14 +36,14 @@ except ImportError as exc:
 # Fixed model paths
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BLIP2_MODEL_PATH = REPO_ROOT / "models" / "blip2-opt-2.7b" / "snapshots" / "59a1ef6c1e5117b3f65523d1c6066825bcf315e3"
-EFFICIENTNET_CHECKPOINT = REPO_ROOT / "models" / "efficientnet" / "best.pt"
+EFFICIENTNET_CHECKPOINT = REPO_ROOT / "runs" / "efficientnet-28" / "best.pt"
 
 # EfficientNet configuration
 EFFICIENTNET_VARIANT = "b3"
 EFFICIENTNET_DATASET = "wikiart"
 
 # Canonical WikiArt 27 style labels
-WIKIART_STYLES: Tuple[str, ...] = (
+ART_STYLE_LABELS: Tuple[str, ...] = (
     "Abstract_Expressionism",
     "Action_painting",
     "Analytical_Cubism",
@@ -73,7 +73,13 @@ WIKIART_STYLES: Tuple[str, ...] = (
     "Ukiyo_e",
 )
 
-STYLE_LABELS_LOWER = {style.lower(): style for style in WIKIART_STYLES}
+NON_ART_LABEL = "COCO_Non_Art"
+
+# WikiArt 27 styles + 1 non-art class = 28 classes
+WIKIART_STYLES: Tuple[str, ...] = ART_STYLE_LABELS + (NON_ART_LABEL,)
+
+STYLE_LABELS_LOWER = {style.lower(): style for style in ART_STYLE_LABELS}
+ART_STYLE_LABEL_SET = set(ART_STYLE_LABELS)
 
 
 def _is_style_label(text: str) -> bool:
@@ -313,6 +319,27 @@ def _classify_image(
     return results
 
 
+def filter_style_labels_for_prompt(
+    labels_with_scores: Sequence[Tuple[str, float]]
+) -> List[Tuple[str, float]]:
+    """
+    Filter EfficientNet predictions to retain only art styles. If the non-art
+    class is the highest-confidence prediction, return an empty list to signal
+    that no style hints should be injected.
+    """
+    if not labels_with_scores:
+        return []
+
+    if labels_with_scores[0][0] == NON_ART_LABEL:
+        return []
+
+    filtered: List[Tuple[str, float]] = []
+    for label, score in labels_with_scores:
+        if label in ART_STYLE_LABEL_SET:
+            filtered.append((label, score))
+    return filtered
+
+
 def _build_augmented_prompt(
     predicted_labels: Sequence[Tuple[str, float]],
     template: str,
@@ -325,8 +352,11 @@ def _build_augmented_prompt(
     the prompt ends with an "Answer:" cue so the generator knows where to start
     responding.
     """
-    label_str = ", ".join([label for label, _ in predicted_labels])
-    template_text = template.format(labels=label_str).strip()
+    style_labels = filter_style_labels_for_prompt(predicted_labels)
+    template_text = ""
+    if style_labels:
+        label_str = ", ".join([label for label, _ in style_labels])
+        template_text = template.format(labels=label_str).strip()
     user_text = user_prompt.strip()
 
     combined_parts = []
@@ -492,7 +522,7 @@ def _run_blip2(
 def generate_response(
     image: Image.Image,
     prompt: str,
-    topk: int = 3,
+    topk: int = 2,
     max_new_tokens: int = 40,
     temperature: float = 0.0,
     prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
@@ -504,7 +534,7 @@ def generate_response(
     Args:
         image: PIL Image to process
         prompt: User prompt/question
-        topk: Number of top EfficientNet labels to include (default: 3)
+        topk: Number of top EfficientNet labels to include (default: 2)
         max_new_tokens: Maximum number of tokens to generate (default: 40)
         temperature: Sampling temperature, 0.0 for greedy decoding (default: 0.0)
         prompt_template: Template for building augmented prompt with labels.
@@ -602,7 +632,7 @@ def _run_blip2_batch(
 def generate_responses_batch(
     images: List[Image.Image],
     prompts: List[str],
-    topk: int = 3,
+    topk: int = 2,
     max_new_tokens: int = 40,
     temperature: float = 0.0,
     prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
@@ -614,7 +644,7 @@ def generate_responses_batch(
     Args:
         images: List of PIL Images to process
         prompts: List of user prompts/questions (must have same length as images)
-        topk: Number of top EfficientNet labels to include (default: 3)
+        topk: Number of top EfficientNet labels to include (default: 2)
         max_new_tokens: Maximum number of tokens to generate (default: 40)
         temperature: Sampling temperature, 0.0 for greedy decoding (default: 0.0)
         prompt_template: Template for building augmented prompt with labels.

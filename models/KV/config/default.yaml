@@ -1,0 +1,57 @@
+project:
+  name: kv-blip2
+  seed: 1337
+  output_dir: /data/artcap-blip2-4/models/KV/runs
+
+data:
+  batch_size: 2
+  num_workers: 4
+  limit: null
+  artquest:
+    train_csv: /data/artcap-blip2-4/datasets/artquest/artquest_train.csv
+    val_csv: /data/artcap-blip2-4/datasets/artquest/artquest_val.csv
+    test_csv: /data/artcap-blip2-4/datasets/artquest/artquest_test.csv
+    image_root: /data/artcap-blip2-4/datasets/SemArt/Images
+    dataset_cfg:
+      image_size: 224
+      caption_key: question
+      answer_key: answer
+      style_key: style
+
+model:
+  num_query_tokens: 32
+  prompt: ""
+  max_txt_len: 64
+  max_new_tokens: 30
+  opt_model: facebook/opt-2.7b
+  efficientnet_output_dim: 768
+  enable_efficientnet_grad: false
+  vision:
+    name: eva_clip_g
+    img_size: 224
+    freeze: true
+  prompt_mapper:
+    hidden_dim: 1024
+    num_tokens: 4
+    dropout: 0.1
+    use_layer_norm: true
+  kv_modulation:
+    controller_dim: 768
+    hidden_dim: 768
+    init_scale: 0.01
+    use_layer_norm: true
+
+training:
+  epochs: 2
+  lr: 5.0e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  grad_accumulation: 1
+  max_grad_norm: 1.0
+  use_amp: true
+  resume_from: null
+
+paths:
+  efficientnet_checkpoint: /data/artcap-blip2-4/models/efficientnet-28/runs/best.pt
+
+

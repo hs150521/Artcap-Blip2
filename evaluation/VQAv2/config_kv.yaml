@@ -12,7 +12,7 @@ model_config:
 
   # Optional shortcut: if provided here, it will be forwarded into the
   # internal model config passed to the loader utility.
-  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/runs/efficientnet-28/best.pt"
+  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/urns/efficientnet-28/best.pt"
 
   # model:
   #   opt_model: "facebook/opt-2.7b"

@@ -2,12 +2,13 @@
 """
 BLIP2 KV Modulation ArtQuest model backend for ArtQuest evaluation.
 
-This module provides an adapter for using BLIP2 with KV modulation models 
-on ArtQuest dataset. It reuses the BLIP2 KV modulation model loader 
-and adapts the prediction function for ArtQuest's specific requirements 
+This module provides an adapter for using BLIP2 with KV modulation models
+on ArtQuest dataset. It reuses the BLIP2 KV modulation model loader
+and adapts the prediction function for ArtQuest's specific requirements
 (image loading, context handling, etc.).
 """
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -91,27 +92,44 @@ def predict_answers_blip2_kv_artquest(
     import logging
     logging.info(f"Using blip2_kv_artquest: batch_size={batch_size}, image_root={image_root}")
     
+    def _normalize_text(value: Any) -> str:
+        """Convert NaN/None values to empty strings and strip whitespace."""
+        if value is None:
+            return ""
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+        text = str(value)
+        return text.strip()
+
     def build_text_input(question: str, context: str, prompt_template: str) -> str:
         """Build text input from question and context using prompt template."""
-        # Try different template formats
+        question_clean = _normalize_text(question)
+        context_clean = _normalize_text(context)
+        template = prompt_template or ""
+
+        body = question_clean
+        if context_clean:
+            body = f"{question_clean}\nContext: {context_clean}".strip()
+
+        text = ""
         try:
-            # Format: "Question: {question} Context: {context} Short answer:"
-            if "{question}" in prompt_template and "{context}" in prompt_template:
-                text = prompt_template.format(question=question, context=context)
-            # Format: "Question: {} Context: {} Short answer:" (two placeholders)
-            elif prompt_template.count("{}") == 2:
-                text = prompt_template.format(question, context)
-            # Format: "Question: {} Short answer:" (single placeholder)
-            elif "{}" in prompt_template:
-                combined = f"{question} Context: {context}"
-                text = prompt_template.format(combined)
+            if "{question}" in template or "{context}" in template:
+                text = template.format(question=question_clean, context=context_clean)
             else:
-                # Default: append context to question
-                text = f"{prompt_template} {question} Context: {context}"
-        except (KeyError, IndexError):
-            # Fallback: simple concatenation
-            text = f"{question} Context: {context}"
-        return text
+                placeholder_count = template.count("{}")
+                if placeholder_count >= 2:
+                    text = template.format(question_clean, context_clean)
+                elif placeholder_count == 1:
+                    text = template.format(body)
+                else:
+                    text = f"{template} {body}".strip()
+        except (KeyError, IndexError, ValueError):
+            text = ""
+
+        if not text.strip():
+            text = body
+
+        return text.strip()
     
     def load_and_process_image(image_name: str, image_root: str, vis_processor):
         """Load image from filename and process it."""
@@ -163,8 +181,7 @@ def predict_answers_blip2_kv_artquest(
             batch = []
             question_ids = []
             processed_images = []
-            text_inputs_original = []
-            text_inputs_retrieved = []
+            text_inputs = []
             
             # Load batch samples
             for j in range(i, min(i + batch_size, len(dataset))):
@@ -178,7 +195,6 @@ def predict_answers_blip2_kv_artquest(
                     image_name = sample.get("image", "")
                     question = sample.get("question", "")
                     context = sample.get("context", "")
-                    candidate_context = sample.get("candidate_context", context)
                     
                     # Check if image is already a tensor (from adapter dataset)
                     if isinstance(image_name, torch.Tensor):
@@ -194,18 +210,21 @@ def predict_answers_blip2_kv_artquest(
                     # Adapter dataset format (from create_artquest_adapter_dataset)
                     # These samples should already have processed images
                     processed_image = getattr(sample, "image", torch.zeros((3, 224, 224)))
-                    question = getattr(sample, "text_input", "")
-                    context = ""  # Context is already combined in text_input
-                    candidate_context = ""
+                    raw_text = getattr(sample, "text_input", "")
+                    question = raw_text
+                    context = ""
                 
                 # If question is empty, try to extract from text_input
                 if not question and hasattr(sample, "text_input"):
                     text_input = sample.text_input
                     # Try to extract question from text_input format: "question Context: context"
                     if "Context:" in text_input:
-                        question = text_input.split("Context:")[0].strip()
+                        question_part, _, context_part = text_input.partition("Context:")
+                        question = question_part.strip()
+                        context = context_part.strip()
                     else:
                         question = text_input
+                        context = ""
                 
                 # Convert to tensor if needed and add batch dimension
                 if not isinstance(processed_image, torch.Tensor):
@@ -216,53 +235,32 @@ def predict_answers_blip2_kv_artquest(
                 
                 processed_images.append(processed_image)
                 
-                # Build text inputs for both contexts
-                text_input_original = build_text_input(question, context, prompt)
-                text_input_retrieved = build_text_input(question, candidate_context, prompt)
+                # Build text input with context
+                text_input = build_text_input(question, context, prompt)
                 
-                text_inputs_original.append(text_input_original)
-                text_inputs_retrieved.append(text_input_retrieved)
+                text_inputs.append(text_input)
             
             # Stack images for batch processing
             if processed_images:
                 images_batch = torch.cat(processed_images, dim=0)
                 
-                # Create samples dict for original context
-                samples_original = {
+                samples = {
                     "image": images_batch,
-                    "text_input": text_inputs_original,
+                    "text_input": text_inputs,
                 }
                 
-                # Generate answers for original context
-                answers_original = model.predict_answers(
-                    samples=samples_original,
+                answers = model.predict_answers(
+                    samples=samples,
                     num_beams=num_beams,
                     inference_method=inference_method,
                     max_len=max_len,
                     min_len=min_len,
                 )
                 
-                # Create samples dict for retrieved context
-                samples_retrieved = {
-                    "image": images_batch,
-                    "text_input": text_inputs_retrieved,
-                }
-                
-                # Generate answers for retrieved context
-                answers_retrieved = model.predict_answers(
-                    samples=samples_retrieved,
-                    num_beams=num_beams,
-                    inference_method=inference_method,
-                    max_len=max_len,
-                    min_len=min_len,
-                )
-                
-                # Collect predictions
-                for idx, (qid, answer_orig, answer_ret) in enumerate(zip(question_ids, answers_original, answers_retrieved)):
+                for qid, answer in zip(question_ids, answers):
                     predictions.append({
                         "question_id": qid,
-                        "answer": answer_orig.strip() if isinstance(answer_orig, str) else str(answer_orig).strip(),
-                        "answer_retrieved": answer_ret.strip() if isinstance(answer_ret, str) else str(answer_ret).strip()
+                        "answer": answer.strip() if isinstance(answer, str) else str(answer).strip(),
                     })
     
     return predictions

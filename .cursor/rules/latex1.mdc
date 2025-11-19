@@ -1,5 +1,5 @@
 ---
-globs: .tex,.bib
+globs: *.tex,*.bib
 alwaysApply: false
 ---
 **角色与目标**

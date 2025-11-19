@@ -37,8 +37,8 @@ except ImportError as exc:  # pragma: no cover - dependency guard
     ) from exc
 
 
-# Canonical WikiArt 27 style labels. Used by default when --efficientnet-dataset=wikiart.
-WIKIART_STYLES: Tuple[str, ...] = (
+# Canonical WikiArt 27 style labels plus a non-art catch-all class.
+ART_STYLE_LABELS: Tuple[str, ...] = (
     "Abstract_Expressionism",
     "Action_painting",
     "Analytical_Cubism",
@@ -68,10 +68,14 @@ WIKIART_STYLES: Tuple[str, ...] = (
     "Ukiyo_e",
 )
 
+NON_ART_LABEL = "COCO_Non_Art"
+ART_STYLE_LABEL_SET = set(ART_STYLE_LABELS)
+WIKIART_LABELS: Tuple[str, ...] = ART_STYLE_LABELS + (NON_ART_LABEL,)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_WIKIART_CHECKPOINT = (
-    REPO_ROOT / "efficientnet" / "runs" / "wikiart_b3" / "best.pt"
+    REPO_ROOT / "runs" / "efficientnet-28" / "best.pt"
 )
 
 
@@ -110,14 +114,14 @@ def parse_args() -> argparse.Namespace:
         default="wikiart",
         help=(
             "Label space to assume for EfficientNet. "
-            "'wikiart' expects 27 WikiArt style classes (default). "
+            "'wikiart' expects 28 classes (27 styles + non-art, default). "
             "Specify 'imagenet' to use the original 1K ImageNet labels."
         ),
     )
     parser.add_argument(
         "--topk",
         type=int,
-        default=3,
+        default=2,
         help="Number of EfficientNet classes to include in the augmented prompt.",
     )
     parser.add_argument(
@@ -311,7 +315,7 @@ def load_efficientnet(
                 categories = [line.strip() for line in f if line.strip()]
 
     if not categories and dataset == "wikiart":
-        categories = list(WIKIART_STYLES)
+        categories = list(WIKIART_LABELS)
 
     state_dict: Optional[dict] = None
     if checkpoint:
@@ -338,7 +342,7 @@ def load_efficientnet(
     if num_classes_override is None and state_dict is not None:
         num_classes_override = infer_num_classes_from_state_dict(state_dict)
     if num_classes_override is None and dataset == "wikiart":
-        num_classes_override = len(WIKIART_STYLES)
+        num_classes_override = len(WIKIART_LABELS)
 
     use_custom_head = num_classes_override is not None
 
@@ -446,13 +450,25 @@ def format_labels(labels_with_scores: Iterable[Tuple[str, float]]) -> str:
     return ", ".join(labels)
 
 
+def _filter_style_labels(predicted_labels: Iterable[Tuple[str, float]]) -> List[Tuple[str, float]]:
+    labels = list(predicted_labels)
+    if not labels:
+        return []
+    if labels[0][0] == NON_ART_LABEL:
+        return []
+    return [(label, score) for label, score in labels if label in ART_STYLE_LABEL_SET]
+
+
 def build_augmented_prompt(
     predicted_labels: Iterable[Tuple[str, float]],
     template: str,
     user_prompt: str,
 ) -> str:
-    label_str = ", ".join([label for label, _ in predicted_labels])
-    template_text = template.format(labels=label_str).strip()
+    style_labels = _filter_style_labels(predicted_labels)
+    template_text = ""
+    if style_labels:
+        labels_text = ", ".join([label for label, _ in style_labels])
+        template_text = template.format(labels=labels_text).strip()
     user_text = user_prompt.strip()
     if template_text and not template_text.endswith((" ", "\n")):
         template_text += " "

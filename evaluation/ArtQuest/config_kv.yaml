@@ -9,7 +9,7 @@ model: "blip2_kv"
 # Model-specific configuration for KV modulation
 model_config:
   # Path to the trained KV-modulated checkpoint
-  checkpoint: "/home/linux/artcap-blip2-4/KV/outputs_multi/best_checkpoint.pt"
+  checkpoint: "/home/linux/artcap-blip2-4/models/KV/outputs/best_checkpoint.pt"
 
   # Optional shortcut: if provided here, it will be forwarded into the
   # internal model config passed to the loader utility.
@@ -47,7 +47,7 @@ run:
   #   - VQAv2短答案: 推荐 10-15
   #   - ArtQuest答案: 推荐 20-30（因为答案可能包含完整句子）
   #   注意：token数通常比单词数多（因为标点、词干化等），建议设置稍大一些
-  max_len: 30  # 增加到25以覆盖95%的答案（95%分位数约6单词，考虑token化需要更多）
+  max_len: 80  # Allow longer completions to avoid truncated answers in descriptive responses
   
   # min_len: 生成答案的最小token数
   #   - 通常设置为1，允许单字/单词答案
@@ -59,7 +59,7 @@ run:
   num_beams: 5
   
   inference_method: "generate"
-  prompt: "Question: {} Short answer:"  # 使用VQAv2格式的prompt，这是模型训练时使用的格式
+  prompt: "{}"  # BLIP2 KV prompt expects a single slot; adapter fills question + context
   
   seed: 2
   output_dir: "ArtQuest/output/KV"

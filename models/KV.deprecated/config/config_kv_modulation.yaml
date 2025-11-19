@@ -1,0 +1,57 @@
+# Configuration for BLIP2-EfficientNet KV Modulation Training
+
+# Model paths
+model:
+  blip2_model_type: "pretrain_opt2.7b"
+  efficientnet_checkpoint: "/home/linux/artcap-blip2-4/runs/efficientnet-28/best.pt"
+  opt_model: "/data/huggingface/hub/models--facebook--opt-2.7b"
+
+# KV Modulation parameters
+kv_modulation:
+  enabled: true
+  num_prefix_tokens: 8
+  efficientnet_feat_dim: 1536
+  qformer_hidden_size: 768
+
+# Dataset paths
+dataset:
+  train_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_train.csv"
+  val_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_val.csv"
+  test_data: "/home/linux/artcap-blip2-4/artquest/data/artquest/artquest_test.csv"  # Optional
+  image_root: "/home/linux/artcap-blip2-4/artquest/data/SemArt/Images"  # Root directory for images
+  cache_path: "/home/linux/artcap-blip2-4/artquest/data/semart_cache.csv"  # Optional
+
+# Training parameters
+training:
+  batch_size: 32
+  num_workers: 8
+  num_epochs: 10
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 1  # Number of steps to accumulate gradients before updating weights
+  use_amp: true  # Use Automatic Mixed Precision (AMP) for faster training and lower memory usage
+  
+  # Save and logging
+  output_dir: "/home/linux/artcap-blip2-4/models/KV/outputs"
+  save_steps: 1000
+  eval_steps: 500
+  logging_steps: 100
+  save_total_limit: 3
+
+# Model architecture
+architecture:
+  vit_model: "eva_clip_g"
+  img_size: 224
+  num_query_token: 32
+  max_txt_len: 32
+  freeze_vit: true
+  freeze_llm: true
+  freeze_efficientnet: true
+
+# Generation parameters (for inference)
+generation:
+  num_beams: 5
+  max_length: 30
+  min_length: 1

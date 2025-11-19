@@ -27,7 +27,10 @@ from lavis.models import load_model
 repo_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(repo_root))
 
-from scripts.prompt_aug.enhanced_blip2_fixed import _classify_image, _build_augmented_prompt, _is_style_label
+from scripts.prompt_aug.enhanced_blip2_fixed import (
+    _classify_image,
+    filter_style_labels_for_prompt,
+)
 
 
 def load_blip2_prompt_aug_lavis_model(config: Dict, device: str) -> Any:
@@ -199,11 +202,12 @@ def _build_augmented_prompt_fixed(labels: list, template: str, user_prompt: str)
     Returns:
         Augmented prompt with context before question
     """
-    if not labels:
+    filtered_labels = filter_style_labels_for_prompt(labels)
+    if not filtered_labels:
         return user_prompt
     
     # Extract just the label names
-    label_names = [label for label, _ in labels]
+    label_names = [label for label, _ in filtered_labels]
     labels_text = ", ".join(label_names)
     
     # Build context part
@@ -244,7 +248,7 @@ def predict_answers_blip2_prompt_aug_lavis(
     
     model_cfg = config.get("model_config", {})
     efficientnet_cfg = model_cfg.get("efficientnet", {})
-    topk = efficientnet_cfg.get("topk", 3)
+    topk = efficientnet_cfg.get("topk", 2)
     prompt_template = efficientnet_cfg.get("prompt_template", "Context: {labels}. ")
     
     predictions = []
