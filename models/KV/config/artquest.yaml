@@ -20,7 +20,7 @@ data:
 model:
   num_query_tokens: 32
   prompt: ""
-  max_txt_len: 64
+  max_txt_len: 256
   max_new_tokens: 30
   opt_model: facebook/opt-2.7b
   efficientnet_output_dim: 768
@@ -41,13 +41,14 @@ model:
     use_layer_norm: true
 
 training:
-  epochs: 10
-  lr: 3.0e-3
+  epochs: 50
+  lr: 1.2e-2
   weight_decay: 0.01
   warmup_steps: 500
   grad_accumulation: 1
   max_grad_norm: 1.0
   use_amp: true
+  amp_mode: auto
   resume_from: null
 
 paths:

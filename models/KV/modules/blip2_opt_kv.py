@@ -25,6 +25,8 @@ from .qformer_kv import BertLMHeadModelKVModulated
 from .efficientnet_adapter import EfficientNetAdapter
 from .prompt_mapper import PromptMapper
 
+logger = logging.getLogger(__name__)
+
 
 class Blip2OPTKV(Blip2Base):
     """BLIP-2 OPT variant with EfficientNet-guided KV modulation."""
@@ -208,12 +210,12 @@ class Blip2OPTKV(Blip2Base):
 
         questions = samples["text_input"]
         answers = samples.get("answers")
-        prompt_prefix = [f"Question: {q} Answer:" for q in questions]
+        prompt_prefix = [f"Question: {q} Short answer:" for q in questions]
 
         if answers is not None:
-            text_sequences = [f"{p} {a}".strip() for p, a in zip(prompt_prefix, answers)]
+            text_sequences = [f"{(f'{p} {a}').strip()}\n" for p, a in zip(prompt_prefix, answers)]
         else:
-            text_sequences = [f"{p} " for p in prompt_prefix]
+            text_sequences = [f"{p}".strip() + "\n" for p in prompt_prefix]
 
         self.opt_tokenizer.padding_side = "right"
         opt_tokens = self.opt_tokenizer(
@@ -239,8 +241,10 @@ class Blip2OPTKV(Blip2Base):
             ).to(inputs_opt.device)
             prefix_lengths = prompt_tokens.attention_mask.sum(dim=1)
             for idx, prefix_len in enumerate(prefix_lengths):
-                mask_len = min(1 + int(prefix_len.item()), targets.size(1))
-                targets[idx, :mask_len] = -100
+                valid_mask_upper = max(targets.size(1) - 1, 0)
+                mask_len = min(int(prefix_len.item()), valid_mask_upper)
+                if mask_len > 0:
+                    targets[idx, :mask_len] = -100
         elif self.prompt:
             targets[:, : self.prompt_length] = -100
 
@@ -250,6 +254,26 @@ class Blip2OPTKV(Blip2Base):
         inputs_embeds = self.opt_model.model.decoder.embed_tokens(opt_tokens.input_ids)
         inputs_embeds = torch.cat([inputs_opt, inputs_embeds], dim=1)
         attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
+
+        valid_token_counts = (targets != -100).sum(dim=1)
+        valid_label_mask = valid_token_counts >= 2
+        if not torch.all(valid_label_mask):
+            dropped = int((~valid_label_mask).sum().item())
+            if dropped > 0:
+                logger.warning(
+                    "Dropping %d samples with <2 supervised tokens (max_txt_len=%d)",
+                    dropped,
+                    self.max_txt_len,
+                )
+            if valid_label_mask.sum() == 0:
+                logger.warning(
+                    "All samples dropped in batch (max_txt_len=%d); returning None loss.",
+                    self.max_txt_len,
+                )
+                return {"loss": None}
+            inputs_embeds = inputs_embeds[valid_label_mask]
+            attention_mask = attention_mask[valid_label_mask]
+            targets = targets[valid_label_mask]
 
         with self.maybe_autocast():
             outputs = self.opt_model(
@@ -305,9 +329,6 @@ class Blip2OPTKV(Blip2Base):
         inputs_embeds = self.opt_model.model.decoder.embed_tokens(opt_tokens.input_ids)
         inputs_embeds = torch.cat([inputs_opt, inputs_embeds], dim=1)
         attention_mask = torch.cat([atts_opt, opt_tokens.attention_mask], dim=1)
-        
-        # 计算输入序列长度（用于后续提取新生成的token）
-        input_length = inputs_embeds.shape[1]
 
         with self.maybe_autocast():
             outputs = self.opt_model.generate(
@@ -324,11 +345,70 @@ class Blip2OPTKV(Blip2Base):
                 eos_token_id=self.eos_token_id,
             )
         
-        # 提取新生成的token（排除输入部分）
-        # 当使用inputs_embeds时，outputs可能包含输入，需要手动提取新token
-        generated_token_ids = outputs[:, input_length:]
-
-        generated_text = self.opt_tokenizer.batch_decode(generated_token_ids, skip_special_tokens=True)
+        generated_text = self.opt_tokenizer.batch_decode(outputs, skip_special_tokens=True)
         return generated_text
+
+    @torch.no_grad()
+    def predict_answers(
+        self,
+        samples: Dict[str, torch.Tensor],
+        num_beams: int = 5,
+        inference_method: str = "generate",
+        max_len: int = 10,
+        min_len: int = 1,
+        top_p: float = 0.9,
+        temperature: float = 1.0,
+        repetition_penalty: float = 1.0,
+        length_penalty: float = 0.0,
+        use_nucleus_sampling: bool = False,
+        prompt: str = "",
+        **kwargs,
+    ):
+        """
+        Predict short answers for VQA-style prompts.
+
+        This mirrors the LAVIS BLIP-2 API so downstream evaluation code can call
+        ``model.predict_answers`` without knowing about KV-specific internals.
+        """
+        if inference_method != "generate":
+            raise ValueError(f"Unsupported inference_method={inference_method}; only 'generate' is available.")
+
+        images: torch.Tensor = samples["image"]
+        questions = samples.get("text_input", [""] * images.size(0))
+        if isinstance(questions, str):
+            questions = [questions]
+
+        # Normalize prompt template
+        prompt_template = prompt or self.prompt or "Question: {} Short answer:"
+        formatted_prompts = []
+        for question in questions:
+            question_text = question if isinstance(question, str) else str(question)
+            if "{}" in prompt_template:
+                formatted_prompts.append(prompt_template.format(question_text))
+            else:
+                formatted_prompts.append(f"{prompt_template} {question_text}".strip())
+
+        generated_answers = self.generate(
+            samples={"image": images, "prompt": formatted_prompts},
+            num_beams=num_beams,
+            max_new_tokens=max_len,
+            min_new_tokens=min_len,
+            top_p=top_p,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            length_penalty=length_penalty,
+            use_nucleus_sampling=use_nucleus_sampling,
+        )
+
+        # Post-process answers: trim whitespace and ensure non-empty strings
+        cleaned_answers = []
+        for answer in generated_answers:
+            if isinstance(answer, str):
+                cleaned = answer.strip()
+            else:
+                cleaned = str(answer)
+            cleaned_answers.append(cleaned)
+
+        return cleaned_answers
 
 

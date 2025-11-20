@@ -63,11 +63,18 @@ export default function Home() {
 				setLoading(false);
 				let errorMessage = response.statusText;
 				try {
-					const errorData = await response.json();
-					errorMessage = errorData.error || errorMessage;
-				} catch (e) {
+					// 先读取为 text，然后尝试解析 JSON
 					const errorText = await response.text();
-					errorMessage = errorText || errorMessage;
+					try {
+						const errorData = JSON.parse(errorText);
+						errorMessage = errorData.error || errorMessage;
+					} catch (e) {
+						// 如果不是 JSON，直接使用 text
+						errorMessage = errorText || errorMessage;
+					}
+				} catch (e) {
+					// 如果读取失败，使用 statusText
+					errorMessage = response.statusText;
 				}
 
 				setMessages((messages) => [
@@ -80,16 +87,38 @@ export default function Home() {
 				return;
 			}
 
-			const caption = await response.text();
+			// Parse JSON response with both model outputs
+			const responseData = await response.json();
 			setLoading(false);
 
-			setMessages((messages) => [
-				...messages,
-				{
+			// Add both responses as separate messages
+			const newMessages: Message[] = [];
+
+			if (responseData.blip2) {
+				newMessages.push({
 					role: "assistant",
-					content: caption
-				}
-			]);
+					content: responseData.blip2,
+					blip2Response: responseData.blip2
+				});
+			}
+
+			if (responseData.kv) {
+				newMessages.push({
+					role: "assistant",
+					content: responseData.kv,
+					kvResponse: responseData.kv
+				});
+			}
+
+			// If no responses, add error message
+			if (newMessages.length === 0) {
+				newMessages.push({
+					role: "assistant",
+					content: "Error: No response from models"
+				});
+			}
+
+			setMessages((messages) => [...messages, ...newMessages]);
 		} catch (error) {
 			setLoading(false);
 			const errorMessage = error instanceof Error ? error.message : String(error);

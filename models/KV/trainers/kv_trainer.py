@@ -16,6 +16,8 @@ from typing import Dict, Iterable, Optional, List
 import numpy as np
 
 import torch
+from contextlib import nullcontext
+
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
@@ -57,7 +59,9 @@ class KVTrainer:
             self.run_dir = output_root / timestamp
             self.run_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.run_dir / "training_log.json"
+        self.ans_log_path = self.run_dir / "ans.json"
         self.log_records: List[Dict] = self._load_existing_logs()
+        self.ans_records: List[Dict] = self._load_json_array(self.ans_log_path)
 
         self.train_loader, self.val_loader, self.test_loader, self.metadata = self._build_dataloaders()
         self.model = load_kv_model(config, device=self.device)
@@ -78,7 +82,17 @@ class KVTrainer:
             lambda step: self._lr_lambda(step, warmup_steps, total_steps),
         )
 
-        self.use_amp = bool(self.training_cfg.get("use_amp", True)) and self.device.type == "cuda"
+        self.amp_mode = str(self.training_cfg.get("amp_mode", "auto")).lower()
+        requested_amp = bool(self.training_cfg.get("use_amp", True)) and self.device.type == "cuda"
+        if requested_amp and self.amp_mode == "auto":
+            opt_model_name = str(self.model_cfg.get("opt_model", "")).lower()
+            if "opt" in opt_model_name:
+                logger.warning(
+                    "Detected OPT language model; disabling AMP to avoid fp16 NaNs. "
+                    "Set training.amp_mode='force' to override."
+                )
+                requested_amp = False
+        self.use_amp = requested_amp
         self.scaler = GradScaler(enabled=self.use_amp)
         self.grad_accum = int(self.training_cfg.get("grad_accumulation", 1))
         self.max_grad_norm = float(self.training_cfg.get("max_grad_norm", 1.0))
@@ -170,6 +184,13 @@ class KVTrainer:
 
         for step, batch in enumerate(pbar, start=1):
             loss = self._forward_batch(batch)
+            if loss is None:
+                self.optimizer.zero_grad(set_to_none=True)
+                continue
+            if torch.isnan(loss):
+                self._log_nan_batch(epoch, step, batch)
+                self.optimizer.zero_grad(set_to_none=True)
+                continue
             loss = loss / self.grad_accum
             self.scaler.scale(loss).backward()
 
@@ -185,6 +206,9 @@ class KVTrainer:
             running_loss.append(loss.item())
             pbar.set_postfix(loss=sum(running_loss) / len(running_loss))
 
+            if step % 100 == 0:
+                self._log_batch_predictions(epoch, step, batch)
+
         metrics = {
             "loss": average(running_loss),
             "exact_match": self._quick_eval_batches(self.train_loader, max_batches=5),
@@ -198,9 +222,12 @@ class KVTrainer:
             "text_input": batch["text_input"],
             "answers": batch.get("answers") or batch.get("answer"),
         }
-        with autocast(enabled=self.use_amp):
+        amp_context = autocast(enabled=self.use_amp) if self.use_amp else nullcontext()
+        with amp_context:
             output = self.model(samples)
             loss = output["loss"]
+            if loss is None:
+                return None
         return loss
 
     # ------------------------------------------------------------------ #
@@ -252,8 +279,18 @@ class KVTrainer:
         return average(matches)
 
     # ------------------------------------------------------------------ #
+    def _log_nan_batch(self, epoch: int, step: int, batch: Dict) -> None:
+        sample_questions = batch["text_input"][:3]
+        logger.error(
+            "Detected NaN loss at epoch %d step %d. Sample questions: %s",
+            epoch,
+            step,
+            sample_questions,
+        )
+
+    # ------------------------------------------------------------------ #
     def _generate_answers(self, batch: Dict) -> Iterable[str]:
-        prompts = [f"Question: {q} Answer:" for q in batch["text_input"]]
+        prompts = [f"Question: {q} Short answer:" for q in batch["text_input"]]
         gen_samples = {
             "image": batch["image"].to(self.device, non_blocking=True),
             "prompt": prompts,
@@ -320,6 +357,51 @@ class KVTrainer:
                     pass
                 buffer = ""
         return logs
+
+    def _load_json_array(self, path: Path) -> List[Dict]:
+        if not path.exists():
+            return []
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+        return []
+
+    def _append_ans_log(self, record: Dict) -> None:
+        self.ans_records.append(record)
+        with self.ans_log_path.open("w", encoding="utf-8") as f:
+            json.dump(self.ans_records, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    def _log_batch_predictions(self, epoch: int, step: int, batch: Dict) -> None:
+        was_training = self.model.training
+        self.model.eval()
+        with torch.no_grad():
+            predictions = self._generate_answers(batch)
+        if was_training:
+            self.model.train()
+
+        refs = batch.get("answers") or batch.get("answer") or []
+        items = []
+        for question, pred, ref in zip(batch["text_input"], predictions, refs):
+            prompt = f"Question: {question} Short answer:"
+            items.append(
+                {
+                    "question": question,
+                    "prompt": prompt,
+                    "prediction": pred,
+                    "reference": ref,
+                }
+            )
+
+        if items:
+            record = {"epoch": epoch, "step": step, "items": items}
+            self._append_ans_log(record)
 
     def _append_log(self, record: Dict) -> None:
         self.log_records.append(record)

@@ -2,7 +2,12 @@ import { Message } from "@/types";
 import type { NextApiRequest, NextApiResponse } from "next";
 
 export const config = {
-	runtime: "nodejs"
+	runtime: "nodejs",
+	api: {
+		bodyParser: {
+			sizeLimit: '50mb',
+		},
+	},
 };
 
 const handler = async (
@@ -40,35 +45,65 @@ const handler = async (
 		const prompt = lastMessage.content || "Question: Describe this image. Short answer:";
 		console.log("Calling FastAPI with prompt:", prompt);
 
-		// Call FastAPI service
+		// Call both FastAPI services in parallel
 		const apiUrl = process.env.BLIP2_API_URL || "http://localhost:8001";
-		const response = await fetch(`${apiUrl}/api/generate`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				image: lastMessage.image,
-				prompt: prompt,
+
+		const [blip2Response, kvResponse] = await Promise.allSettled([
+			fetch(`${apiUrl}/api/generate`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					image: lastMessage.image,
+					prompt: prompt,
+				}),
 			}),
-		});
+			fetch(`${apiUrl}/api/generate-kv`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					image: lastMessage.image,
+					prompt: prompt,
+				}),
+			}),
+		]);
 
-		console.log("FastAPI response status:", response.status);
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error("FastAPI error:", errorText);
-			res.status(response.status).json({ error: errorText });
-			return;
+		// Process BLIP-2 response
+		let blip2Caption = "";
+		if (blip2Response.status === "fulfilled" && blip2Response.value.ok) {
+			const blip2Data = await blip2Response.value.json();
+			blip2Caption = blip2Data.caption || "";
+		} else {
+			const error = blip2Response.status === "fulfilled"
+				? await blip2Response.value.text().catch(() => "Unknown error")
+				: blip2Response.reason?.message || "Failed to call BLIP-2";
+			blip2Caption = `Error: ${error}`;
 		}
 
-		const data = await response.json();
-		const caption = data.caption || "";
-		console.log("Generated caption length:", caption.length);
+		// Process KV response
+		let kvCaption = "";
+		if (kvResponse.status === "fulfilled" && kvResponse.value.ok) {
+			const kvData = await kvResponse.value.json();
+			kvCaption = kvData.caption || "";
+		} else {
+			const error = kvResponse.status === "fulfilled"
+				? await kvResponse.value.text().catch(() => "Unknown error")
+				: kvResponse.reason?.message || "Failed to call KV model";
+			kvCaption = `Error: ${error}`;
+		}
 
-		// Return as stream for consistency with original API
-		res.setHeader("Content-Type", "text/plain; charset=utf-8");
-		res.status(200).send(caption);
+		console.log("BLIP-2 caption length:", blip2Caption.length);
+		console.log("KV caption length:", kvCaption.length);
+
+		// Return both captions as JSON
+		res.setHeader("Content-Type", "application/json");
+		res.status(200).json({
+			blip2: blip2Caption,
+			kv: kvCaption
+		});
 	} catch (error) {
 		console.error("Error in API handler:", error);
 		res.status(500).json({ error: String(error) });

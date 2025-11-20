@@ -16,12 +16,36 @@ import torch
 from tqdm import tqdm
 
 # Ensure the KV package is importable
+# First, ensure project root is in sys.path (required for models.KV imports)
 REPO_ROOT = Path(__file__).resolve().parents[3]
-KV_ROOT = REPO_ROOT / "models" / "KV"
-if str(KV_ROOT) not in sys.path:
-    sys.path.insert(0, str(KV_ROOT))
+REPO_ROOT_STR = str(REPO_ROOT)
+if REPO_ROOT_STR in sys.path:
+    sys.path.remove(REPO_ROOT_STR)
+sys.path.insert(0, REPO_ROOT_STR)
 
-from utils.model_loader import load_blip2_kv_modulated_model  # type: ignore  # noqa: E402
+# Define KV_ROOT for use in _kv_models_package context manager
+KV_ROOT = REPO_ROOT / "models" / "KV"
+
+# Import model_loader using importlib to ensure proper path resolution
+_model_loader_path = REPO_ROOT / "models" / "KV" / "utils" / "model_loader.py"
+if _model_loader_path.exists():
+    spec = importlib.util.spec_from_file_location("utils.model_loader", _model_loader_path)
+    if spec and spec.loader:
+        _model_loader_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_model_loader_module)
+        load_blip2_kv_modulated_model = _model_loader_module.load_blip2_kv_modulated_model
+    else:
+        # Fallback to normal import
+        KV_ROOT_STR = str(KV_ROOT)
+        if KV_ROOT_STR not in sys.path:
+            sys.path.insert(1, KV_ROOT_STR)
+        from utils.model_loader import load_blip2_kv_modulated_model  # type: ignore  # noqa: E402
+else:
+    # Fallback to normal import
+    KV_ROOT_STR = str(KV_ROOT)
+    if KV_ROOT_STR not in sys.path:
+        sys.path.insert(1, KV_ROOT_STR)
+    from utils.model_loader import load_blip2_kv_modulated_model  # type: ignore  # noqa: E402
 
 
 LOGGER = logging.getLogger(__name__)
@@ -57,8 +81,14 @@ def _build_loader_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if opt_model_path and "opt_model" not in model_cfg:
         model_cfg["opt_model"] = opt_model_path
 
+    # Don't convert opt_model to absolute path if it's a HuggingFace model ID
+    # Only convert if it's actually a file path
     if "opt_model" in model_cfg:
-        model_cfg["opt_model"] = _to_abs_path(model_cfg["opt_model"])
+        opt_model_val = model_cfg["opt_model"]
+        # Check if it looks like a file path (contains / and doesn't look like HF model ID)
+        if "/" in opt_model_val and Path(opt_model_val).exists():
+            model_cfg["opt_model"] = _to_abs_path(opt_model_val)
+        # Otherwise, keep it as is (HF model ID like "facebook/opt-2.7b")
 
     return {
         "model": model_cfg,
@@ -69,30 +99,9 @@ def _build_loader_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
 @contextmanager
 def _kv_models_package():
-    models_package_path = KV_ROOT / "models"
-    previous_module = sys.modules.get("models")
-    if previous_module and getattr(previous_module, "__file__", "").startswith(str(models_package_path)):
-        # Already set to KV models package
-        yield
-        return
-
-    spec = importlib.util.spec_from_file_location(
-        "models",
-        models_package_path / "__init__.py",
-        submodule_search_locations=[str(models_package_path)],
-    )
-    module = importlib.util.module_from_spec(spec)
-
-    try:
-        sys.modules["models"] = module
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        yield
-    finally:
-        if previous_module is not None:
-            sys.modules["models"] = previous_module
-        else:
-            sys.modules.pop("models", None)
+    # This context manager is no longer needed since we've fixed the import paths
+    # But we keep it for compatibility. Just yield without doing anything.
+    yield
 
 
 def _normalize_question_id(question_id: Any) -> Any:
