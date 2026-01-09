@@ -1,0 +1,59 @@
+seed: 42
+
+paths:
+  # 你可以直接把这里改成你的数据根目录（你之前提到的是 /data/artcap-blip2-4/datasets）
+  datasets_root: /data/artcap-blip2-4/datasets
+  # 规则要求：不要向 /data/... 写 outputs；输出统一落到项目内 ./outputs
+  manifests_dir: ./outputs/effb3_28cls/manifests
+  output_dir: ./outputs/effb3_28cls
+
+labels:
+  classes_json: EfficientNet-B3/labels/classes_28.json
+
+data:
+  # 统一 manifest：每行至少包含 image_path,label_id,split
+  train_manifest: train.csv
+  val_manifest: val.csv
+  test_manifest: test.csv
+
+  image_size: 300          # EfficientNet-B3 默认分辨率（常用 300）
+  num_workers: 8
+  batch_size: 64
+  pin_memory: true
+
+sampling:
+  enabled: true
+  # 论文设定：艺术:非艺术=27:1
+  art_to_nonart_ratio: 27
+  non_art_label_name: non_art
+
+train:
+  epochs: 10
+  lr: 0.0003
+  weight_decay: 0.01
+  optimizer: adamw
+  scheduler: cosine
+  warmup_epochs: 1
+
+  amp: true
+  grad_clip_norm: 1.0
+  log_every: 50
+  save_every_epochs: 1
+
+model:
+  backbone: efficientnet_b3
+  pretrained: true
+  num_classes: 28
+  # 可选：输出低维嵌入 s（供后续 BLIP-2 风格先验注入）
+  embed_dim: 256
+
+augment:
+  train:
+    random_resized_crop_scale_min: 0.7
+    random_resized_crop_scale_max: 1.0
+    hflip_prob: 0.5
+    color_jitter: true
+  eval:
+    resize_shorter: 320
+    center_crop: 300
+

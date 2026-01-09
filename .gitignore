@@ -1,0 +1,10 @@
+./outputs/
+outputs/
+**/outputs/
+*.pt
+*.pth
+*.onnx
+paper/
+.cursor/
+__pycache__/
+
