@@ -12,13 +12,13 @@ labels:
 
 data:
   # 统一 manifest：每行至少包含 image_path,label_id,split
-  train_manifest: train.csv
-  val_manifest: val.csv
-  test_manifest: test.csv
+  train_manifest: all.csv
+  val_manifest: all.csv
+  test_manifest: all.csv
 
   image_size: 300          # EfficientNet-B3 默认分辨率（常用 300）
-  num_workers: 8
-  batch_size: 64
+  num_workers: 16
+  batch_size: 256
   pin_memory: true
 
 sampling:
@@ -28,7 +28,7 @@ sampling:
   non_art_label_name: non_art
 
 train:
-  epochs: 10
+  epochs: 20
   lr: 0.0003
   weight_decay: 0.01
   optimizer: adamw
