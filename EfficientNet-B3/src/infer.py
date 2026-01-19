@@ -15,6 +15,7 @@ add_src_to_path()
 from data.transforms import build_eval_transforms
 from model import EfficientNetB3Classifier
 from utils.checkpoint import load_checkpoint
+from utils.config import is_timestamp_dir, resolve_run_dir
 from utils.labels import load_classes
 
 
@@ -80,7 +81,28 @@ def main() -> None:
     if not images:
         raise SystemExit("No images provided. Use --image / --image_list / --image_dir")
 
-    out_f = open(args.out, "w", encoding="utf-8") if args.out else None
+    out_f = None
+    if args.out:
+        out_path = Path(args.out)
+        if out_path.exists() and out_path.is_dir():
+            base_dir = out_path.resolve()
+            run_dir = base_dir if is_timestamp_dir(base_dir) else Path(resolve_run_dir(base_dir, strategy="create"))
+            run_dir.mkdir(parents=True, exist_ok=True)
+            out_path = run_dir / "predictions.jsonl"
+        elif out_path.suffix == "":
+            # treat as directory path even if not existing yet
+            base_dir = out_path.resolve()
+            run_dir = base_dir if is_timestamp_dir(base_dir) else Path(resolve_run_dir(base_dir, strategy="create"))
+            run_dir.mkdir(parents=True, exist_ok=True)
+            out_path = run_dir / "predictions.jsonl"
+        else:
+            # treat as file path: write it under a timestamp run dir of its parent (if parent not already timestamped)
+            base_dir = out_path.parent.resolve()
+            run_dir = base_dir if is_timestamp_dir(base_dir) else Path(resolve_run_dir(base_dir, strategy="create"))
+            run_dir.mkdir(parents=True, exist_ok=True)
+            out_path = run_dir / out_path.name
+
+        out_f = open(str(out_path), "w", encoding="utf-8")
     try:
         for img_path in images:
             res = infer_one(model, tfm, img_path, device=device, id_to_name=id_to_name)

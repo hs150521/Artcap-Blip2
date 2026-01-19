@@ -89,13 +89,19 @@ python EfficientNet-B3/scripts/merge_manifests.py \
 python EfficientNet-B3/src/train.py --config EfficientNet-B3/configs/train.yaml
 ```
 
-默认启用论文设定的采样比：**艺术:非艺术 = 27:1**。
+默认启用采样策略：`class_balanced`（epoch 级别近似类均衡采样），缓解长尾，提升各类别参与训练的均衡度。
 
-输出目录（`train.yaml` 的 `paths.output_dir`）将包含：
+输出目录：
+- 你在 `train.yaml` 里配置的是一个“基目录”（例如 `./outputs/effb3_28cls`）
+- 实际运行会在其下创建时间戳子目录：`./outputs/effb3_28cls/yyyy_mm_dd_hh_mm_ss/`
+
+每次运行生成的目录将包含：
 - `checkpoints/best.pt`
 - `checkpoints/last.pt`
 - `metrics/`（acc、每类acc、混淆矩阵等）
 - `logs/`（包含数据检查结果 `data_check.json` 等）
+
+如仍需旧的 art/non_art 比例采样，可在 `train.yaml` 的 `sampling.mode` 里切回 `art_nonart`，并设置 `sampling.art_to_nonart_ratio`。
 
 ### 4.1 Smoke test（规则要求）
 

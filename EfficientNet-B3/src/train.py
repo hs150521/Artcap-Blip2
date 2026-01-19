@@ -9,6 +9,7 @@ from typing import Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -23,11 +24,48 @@ from data.sampler import ArtNonArtBatchSampler, ArtNonArtSampling
 from data.transforms import build_eval_transforms, build_train_transforms
 from model import EfficientNetB3Classifier
 from utils.checkpoint import CheckpointPayload, load_checkpoint, save_checkpoint, save_json
-from utils.config import ensure_dir, load_yaml, parse_paths
+from utils.config import ensure_dir, is_timestamp_dir, load_yaml, parse_paths, resolve_run_dir
 from utils.labels import load_classes
 from utils.metrics import accuracy, confusion_matrix, per_class_accuracy, precision_recall_binary
 from utils.data_check import check_manifest
 from utils.seed import seed_everything
+
+
+class FocalLoss(nn.Module):
+    """
+    Multi-class softmax Focal Loss with optional per-class weights.
+
+    loss = w_y * (1 - p_t)^gamma * (-log(p_t))
+    """
+
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor | None = None, reduction: str = "mean"):
+        super().__init__()
+        if gamma < 0:
+            raise ValueError("gamma must be >= 0")
+        if reduction not in {"mean", "sum", "none"}:
+            raise ValueError("reduction must be one of: mean|sum|none")
+        self.gamma = float(gamma)
+        self.register_buffer("weight", weight if weight is not None else None)
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # logits: [B, C], target: [B]
+        log_probs = F.log_softmax(logits, dim=-1)  # [B, C]
+        log_pt = log_probs.gather(dim=-1, index=target.unsqueeze(-1)).squeeze(-1)  # [B]
+        pt = log_pt.exp()  # [B]
+
+        focal = (1.0 - pt).clamp(min=0.0).pow(self.gamma)
+        loss = -focal * log_pt
+
+        if self.weight is not None:
+            w = self.weight.gather(dim=0, index=target)  # [B]
+            loss = loss * w
+
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
 
 
 def _resolve_manifest_path(manifests_dir: str, filename: str) -> str:
@@ -58,7 +96,7 @@ def _build_loaders(cfg: Dict[str, Any], device: torch.device) -> Tuple[DataLoade
 
     sampling_cfg = cfg.get("sampling", {})
     enabled = bool(sampling_cfg.get("enabled", True))
-    ratio = int(sampling_cfg.get("art_to_nonart_ratio", 27))
+    mode = str(sampling_cfg.get("mode", "class_balanced"))
 
     classes_json = cfg.get("labels", {}).get("classes_json", "EfficientNet-B3/labels/classes_28.json")
     id_to_name, name_to_id = load_classes(classes_json)
@@ -67,11 +105,28 @@ def _build_loaders(cfg: Dict[str, Any], device: torch.device) -> Tuple[DataLoade
         raise ValueError(f"non_art_label_name '{non_art_name}' not found in classes_json.")
     non_art_id = int(name_to_id[non_art_name])
 
+    # class counts / weights for loss re-weighting (computed from train split only)
+    num_classes = len(id_to_name)
+    counts = [0 for _ in range(num_classes)]
+    for y in train_ds.labels:
+        yi = int(y)
+        if 0 <= yi < num_classes:
+            counts[yi] += 1
+    if any(c == 0 for c in counts):
+        missing = [i for i, c in enumerate(counts) if c == 0]
+        print(f"[warn] some classes missing in train split, will clamp weights. missing={missing}")
+    # inverse frequency weights, normalized to mean=1
+    denom = [max(1, c) for c in counts]
+    inv = [1.0 / float(c) for c in denom]
+    mean_inv = sum(inv) / max(1, len(inv))
+    weights = torch.tensor([v / max(1e-12, mean_inv) for v in inv], dtype=torch.float32)
+    weights = weights.to(device)
+
     if enabled:
         batch_sampler = ArtNonArtBatchSampler(
             labels=train_ds.labels,
             batch_size=batch_size,
-            cfg=ArtNonArtSampling(enabled=True, art_to_nonart_ratio=ratio, non_art_label_id=non_art_id),
+            cfg=ArtNonArtSampling(enabled=True, mode=mode, non_art_label_id=non_art_id),
             seed=int(cfg.get("seed", 42)),
             drop_last=True,
         )
@@ -96,7 +151,13 @@ def _build_loaders(cfg: Dict[str, Any], device: torch.device) -> Tuple[DataLoade
         pin_memory=pin_memory,
     )
 
-    meta = {"id_to_name": id_to_name, "name_to_id": name_to_id, "non_art_id": non_art_id}
+    meta = {
+        "id_to_name": id_to_name,
+        "name_to_id": name_to_id,
+        "non_art_id": non_art_id,
+        "train_class_counts": counts,
+        "class_weights": weights,
+    }
     return train_loader, val_loader, meta
 
 
@@ -141,7 +202,14 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     paths = parse_paths(cfg)
-    out_dir = ensure_dir(str(Path(paths.output_dir).resolve()))
+    # 统一输出：output_dir/<yyyy_mm_dd_hh_mm_ss>/
+    if args.resume:
+        rp = Path(args.resume).resolve()
+        resume_run_dir = rp.parent.parent if rp.parent.name == "checkpoints" else rp.parent
+        out_dir = ensure_dir(str(resume_run_dir))
+    else:
+        base_out = Path(paths.output_dir).resolve()
+        out_dir = ensure_dir(str(base_out) if is_timestamp_dir(base_out) else resolve_run_dir(base_out, strategy="create"))
     ckpt_dir = ensure_dir(str(Path(out_dir) / "checkpoints"))
     metrics_dir = ensure_dir(str(Path(out_dir) / "metrics"))
     logs_dir = ensure_dir(str(Path(out_dir) / "logs"))
@@ -189,7 +257,9 @@ def main() -> None:
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=wd)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs))
     scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss()
+    # class-balanced sampling + class-weighted focal loss for long-tail
+    class_weights = meta.get("class_weights", None)
+    criterion = FocalLoss(gamma=2.0, weight=class_weights, reduction="mean")
 
     start_epoch = 0
     global_step = 0
@@ -220,6 +290,12 @@ def main() -> None:
 
     for epoch in range(start_epoch, epochs):
         model.train()
+        # vary sampler shuffling per epoch (if supported)
+        if hasattr(train_loader.batch_sampler, "set_epoch"):
+            try:
+                train_loader.batch_sampler.set_epoch(epoch)
+            except Exception:
+                pass
         total_batches = len(train_loader)
         if run_ratio < 100:
             total_batches = max(1, int(total_batches * (run_ratio / 100.0)))

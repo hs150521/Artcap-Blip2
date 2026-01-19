@@ -13,6 +13,7 @@ add_src_to_path()
 
 from model import EfficientNetB3Classifier
 from utils.checkpoint import load_checkpoint, save_json
+from utils.config import is_timestamp_dir, resolve_run_dir
 from utils.labels import load_classes
 
 
@@ -26,7 +27,8 @@ def main() -> None:
     ap.add_argument("--image_size", type=int, default=300)
     args = ap.parse_args()
 
-    out_dir = Path(args.out_dir).resolve()
+    base_out = Path(args.out_dir).resolve()
+    out_dir = base_out if is_timestamp_dir(base_out) else Path(resolve_run_dir(base_out, strategy="create"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     id_to_name, _ = load_classes(args.classes_json)

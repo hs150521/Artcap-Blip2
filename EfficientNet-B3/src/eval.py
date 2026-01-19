@@ -17,7 +17,7 @@ from data.dataset import ImageClassificationDataset
 from data.transforms import build_eval_transforms
 from model import EfficientNetB3Classifier
 from utils.checkpoint import load_checkpoint
-from utils.config import ensure_dir, load_yaml, parse_paths
+from utils.config import ensure_dir, is_timestamp_dir, load_yaml, parse_paths, resolve_run_dir
 from utils.labels import load_classes
 from utils.metrics import accuracy, confusion_matrix, per_class_accuracy, precision_recall_binary
 from utils.data_check import check_manifest
@@ -113,7 +113,21 @@ def main() -> None:
 
     cfg = load_yaml(args.config)
     paths = parse_paths(cfg)
-    out_dir = paths.output_dir
+    base_out = Path(paths.output_dir).resolve()
+    if is_timestamp_dir(base_out):
+        out_dir = str(base_out)
+    else:
+        # pick latest run dir so default checkpoint works
+        try:
+            out_dir = resolve_run_dir(base_out, strategy="latest")
+        except FileNotFoundError:
+            if not args.checkpoint:
+                raise SystemExit(
+                    f"No timestamped run directory found under {base_out}. "
+                    f"Please specify --checkpoint, or run training first."
+                )
+            out_dir = str(base_out)
+
     ckpt = args.checkpoint or str((Path(out_dir) / "checkpoints" / "best.pt").resolve())
 
     # 数据检查（按规则：先检查再使用）

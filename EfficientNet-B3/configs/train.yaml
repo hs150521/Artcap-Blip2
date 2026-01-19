@@ -23,8 +23,10 @@ data:
 
 sampling:
   enabled: true
-  # 论文设定：艺术:非艺术=27:1
-  art_to_nonart_ratio: 27
+  # 采样方式：
+  # - class_balanced：epoch 级别近似类均衡采样（每类出现次数尽量相等），缓解长尾
+  # - art_nonart：旧模式，batch 内保持 art:non_art ≈ ratio:1（若你还需要可保留 art_to_nonart_ratio）
+  mode: class_balanced
   non_art_label_name: non_art
 
 train:
